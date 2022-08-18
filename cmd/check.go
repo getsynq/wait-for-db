@@ -2,24 +2,21 @@ package cmd
 
 import (
 	"database/sql"
-	"fmt"
+	"github.com/mxssl/wait-for-pg/util"
+	"github.com/spf13/cobra"
 	"log"
+	nurl "net/url"
 	"os"
 	"time"
 
+	_ "github.com/ClickHouse/clickhouse-go"
 	_ "github.com/lib/pq"
-	"github.com/spf13/cobra"
 )
 
 type config struct {
-	host     string
-	port     int
-	user     string
-	password string
-	dbname   string
+	database string
 	retry    int
 	sleep    int
-	sslmode  string
 }
 
 var c config
@@ -27,8 +24,8 @@ var c config
 // checkCmd represents the check command
 var checkCmd = &cobra.Command{
 	Use:   "check",
-	Short: "Check if pg is ready",
-	Long:  `Check if pg is ready`,
+	Short: "Check if db is ready",
+	Long:  `Check if db is ready`,
 	Run: func(cmd *cobra.Command, args []string) {
 		check(c)
 	},
@@ -37,30 +34,10 @@ var checkCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(checkCmd)
 
-	checkCmd.Flags().StringVar(&c.host,
-		"host",
-		c.host,
-		"host")
-
-	checkCmd.Flags().IntVar(&c.port,
-		"port",
-		5432,
-		"port")
-
-	checkCmd.Flags().StringVar(&c.user,
-		"user",
-		c.user,
-		"user")
-
-	checkCmd.Flags().StringVar(&c.password,
-		"password",
-		c.password,
-		"password")
-
-	checkCmd.Flags().StringVar(&c.dbname,
-		"dbname",
-		c.dbname,
-		"dbname")
+	checkCmd.Flags().StringVar(&c.database,
+		"database",
+		c.database,
+		"database")
 
 	checkCmd.Flags().IntVar(&c.retry,
 		"retry",
@@ -71,18 +48,40 @@ func init() {
 		"sleep",
 		1,
 		"sleep")
-	
-	checkCmd.Flags().StringVar(&c.sslmode,
-		"sslmode",
-		"require",
-		"sslmode")
+}
+
+type ClickHouse struct {
+	conn *sql.DB
+}
+
+type Pg struct {
+	conn *sql.DB
 }
 
 func check(c config) {
-	connString := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s connect_timeout=1", c.host, c.port, c.user, c.password, c.dbname, c.sslmode)
+	purl, err := nurl.Parse(c.database)
+
+	if err != nil {
+		log.Fatal("Could not parse database url")
+	}
+
+	scheme, err := util.SchemeFromURL(c.database)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	q := util.FilterCustomQuery(purl)
+
+	// Make this pretty
+	if scheme == "clickhouse" {
+		q.Scheme = "tcp"
+	}
+
+	log.Println(q.String())
+
 	for i := 0; i < c.retry; i++ {
 		time.Sleep(time.Duration(c.sleep) * time.Second)
-		db, err := sql.Open("postgres", connString)
+		db, err := sql.Open(scheme, q.String())
 		if db != nil {
 			err := db.Ping()
 			defer db.Close()
